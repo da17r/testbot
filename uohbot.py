@@ -1,20 +1,14 @@
 import logging
 import os
-import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler,
-    MessageHandler, filters, ConversationHandler
-)
+from telegram.ext import (ApplicationBuilder, CommandHandler, ContextTypes,
+                          CallbackQueryHandler, MessageHandler, filters, ConversationHandler)
 import fitz  # PyMuPDF
 
-# Logging setup
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Conversation states
-(SELECT_STAGE, ENTER_NAME, SELECT_GENDER, ENTER_DETAILS, VERIFY_CODE, EDIT_INFO, ADMIN_PANEL, SPECIFY_GENDER) = range(8)
+(SELECT_STAGE, ENTER_NAME, SELECT_GENDER, ENTER_DETAILS, VERIFY_CODE, EDIT_INFO, ADMIN_PANEL, SPECIFY_GENDER, ADMIN_REMOVE_CODE) = range(9)
 
-# Global storage
 CODE_FILE = "codes.pdf"
 USER_DATA = {}
 ADMIN_CODE = "Dadyar.admin"
@@ -197,47 +191,45 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = "📑 Registered Codes and Data:\n"
         for code, user in USER_DATA.items():
             message += f"\n🔑 Code: {code}\n  👤 Name: {user['name']}\n  🚻 Gender: {user['gender']}\n  📝 Details: {user['details']}\n"
+        message += "\n🗑️ Send a code to delete its data."
         await update.message.reply_text(message)
-        return ConversationHandler.END
+        return ADMIN_REMOVE_CODE
     else:
         await update.message.reply_text("❌ Invalid admin code.")
         return ADMIN_PANEL
 
-if __name__ == '__main__':
-    TOKEN = os.getenv("BOT_TOKEN")
-    if not TOKEN:
-        print("❌ BOT_TOKEN environment variable not set!")
-        sys.exit(1)
+async def admin_remove_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip()
+    if code in USER_DATA:
+        user = USER_DATA.pop(code)
+        CODE_USAGE.pop(code, None)
+        for stage in STAGES:
+            STAGES[stage] = [u for u in STAGES[stage] if u.get("user_id") != user["user_id"]]
+        await update.message.reply_text(f"✅ Data for code {code} has been removed.")
+    else:
+        await update.message.reply_text("❌ Code not found.")
+    return ADMIN_REMOVE_CODE
 
+if __name__ == '__main__':
+    import sys
     try:
-        app = ApplicationBuilder().token(TOKEN).build()
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
         conv_handler = ConversationHandler(
             entry_points=[CallbackQueryHandler(handle_menu)],
             states={
                 VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_code)],
-                SELECT_STAGE: [
-                    CallbackQueryHandler(choose_stage, pattern="^choose_stage_"),
-                    CallbackQueryHandler(handle_menu, pattern='^back_to_stage$')
-                ],
-                ENTER_NAME: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, enter_name),
-                    CallbackQueryHandler(handle_menu, pattern='^back_to_stage$')
-                ],
-                SELECT_GENDER: [
-                    CallbackQueryHandler(select_gender, pattern="^gender_"),
-                    CallbackQueryHandler(handle_menu, pattern='^back_to_name$')
-                ],
-                SPECIFY_GENDER: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, specify_gender),
-                    CallbackQueryHandler(handle_menu, pattern='^back_to_gender$')
-                ],
-                ENTER_DETAILS: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, enter_details),
-                    CallbackQueryHandler(handle_menu, pattern='^back_to_gender$')
-                ],
+                SELECT_STAGE: [CallbackQueryHandler(choose_stage, pattern="^choose_stage_"), CallbackQueryHandler(handle_menu, pattern='^back_to_stage$')],
+                ENTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_name), CallbackQueryHandler(handle_menu, pattern='^back_to_stage$')],
+                SELECT_GENDER: [CallbackQueryHandler(select_gender, pattern="^gender_"), CallbackQueryHandler(handle_menu, pattern='^back_to_name$')],
+                SPECIFY_GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, specify_gender), CallbackQueryHandler(handle_menu, pattern='^back_to_gender$')],
+                ENTER_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_details), CallbackQueryHandler(handle_menu, pattern='^back_to_gender$')],
                 EDIT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_info)],
                 ADMIN_PANEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_panel)],
+                ADMIN_REMOVE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_remove_code)],
             },
             fallbacks=[CallbackQueryHandler(handle_menu, pattern='^start$')],
         )
@@ -245,7 +237,6 @@ if __name__ == '__main__':
         app.add_handler(CommandHandler("start", start))
         app.add_handler(conv_handler)
         app.run_polling()
-
     except Exception as e:
         print(f"❌ Bot crashed: {e}")
         input("Press Enter to exit...")
